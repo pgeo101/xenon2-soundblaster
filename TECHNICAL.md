@@ -35,6 +35,10 @@ GUS volume registers are logarithmic. For nonzero L, the driver subtracts `round
 
 The signed sample bank remains 124,496 bytes; 9,580 x 32-byte music command frames occupy 19 EMS pages. GF1 voices 0..3 play music and 4..11 effects, with 14 active chip voices for a 44.1 kHz GF1 clock. PIO upload and the game's existing timer drive playback; no GUS DMA or IRQ is required.
 
+For genuine GF1 compatibility, 8-bit GF1 registers are written byte-wide through base+105h while 16-bit registers retain word writes through base+104h. The driver also sets the 14-voice clock before initializing those voices, following the Gravis SDK ordering. On the tested GUS MAX, these changes correct the high-pitched/noisy music produced by the previous generic word-write path.
+
+One-shot effects additionally re-latch their logarithmic volume immediately after the voice is started. The music path already performs a post-start volume write on its 50 Hz update; without the equivalent SFX write, the tested genuine GUS MAX received the effect requests but kept the effect voices silent. PicoGUS tolerated the earlier sequence.
+
 ## Amiga effect provenance
 
 The separate 18-sample effect bank begins at decompressed executable offset **0x2B69C**. Records contain a big-endian byte length, big-endian rate, then signed 8-bit PCM. Initialization is near **0x1AE16**, descriptors near **0x1AF52**, raw dispatch near **0x1B072**. The separate synthesized-effect table near 0x1B392 is not emulated.

@@ -48,3 +48,23 @@ GUS mode on a real 486 at 66 MHz with PicoGUS in GUS mode.
 The unified SB mode and individual F5-F8 checks have no separate physical
 hardware report. The earlier 386/PicoGUS SB report covers the music-only build. Full all-level coverage, every effect
 mapping, and exact Paula waveforms remain outside the verified scope.
+
+
+2026-09-25 — genuine Gravis UltraSound MAX compatibility test
+
+PASS: real GF1 music playback after splitting GF1 byte-register writes to
+base+105h from 16-bit register writes to base+104h and using the canonical
+14-voice initialization order. The prior build on the same GUS MAX produced
+high-pitched/noisy audio that loosely followed the music.
+
+The first corrected build played music correctly but produced no effects.
+Standalone /TEST diagnostics recorded exactly two valid digital-effect
+requests (DOS IDs 2 and 6), with zero unsupported requests and zero EMS/EXEC
+errors, isolating the remaining problem to GF1 effect-voice playback.
+
+PASS: immediately re-latching the effect volume after starting the GF1 voice
+restores both /TEST sound effects on the genuine GUS MAX. This mirrors the
+working music path, which already rewrites voice volume after sample start.
+
+Real-hardware validation here covers /TEST music and its two triggered effects;
+full-game/all-effect-map coverage remains outside the verified scope.

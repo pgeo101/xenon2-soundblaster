@@ -255,7 +255,7 @@ parse_env:
  stc
  ret
 
-; BX=GF1 register, AX=value (byte registers use AH).
+; BX=GF1 16-bit register, AX=value.
 reg_write:
  push ax
  push dx
@@ -271,6 +271,25 @@ reg_write:
  out dx,ax
  pop dx
  ret
+
+; BL=GF1 8-bit register, AL=value. The GUS SDK defines byte-register data at
+; base+105h; keep those accesses byte-wide rather than synthesizing them via
+; a word write to the 16-bit data port at base+104h.
+reg_write8:
+ push ax
+ push dx
+ mov ah,al
+ mov dx,[base]
+ add dx,103h
+ mov al,bl
+ out dx,al
+ add dx,2
+ mov al,ah
+ out dx,al
+ pop dx
+ pop ax
+ ret
+
 reg_read:
  push dx
  mov dx,[base]
@@ -303,9 +322,21 @@ gf_delay:
  pop cx
  ret
 control_write:
- call reg_write
+ call reg_write8
  call gf_delay
- call reg_write
+ call reg_write8
+ ret
+
+; The SDK full reset waits ten 4.8us-class delays. gf_delay is deliberately
+; conservative (16 ISA reads rather than the SDK's seven), so five calls meet
+; or exceed the documented settling window without relying on CPU speed.
+gf_reset_delay:
+ push cx
+ mov cx,5
+.loop:
+ call gf_delay
+ loop .loop
+ pop cx
  ret
 ; EBP=byte address. Preserve AX (sample value).
 set_dram:
@@ -314,21 +345,21 @@ set_dram:
  mov eax,ebp
  mov bx,43h
  call reg_write
- shr eax,8
- and ax,0f00h
+ shr eax,16
+ and al,0fh
  mov bl,44h
- call reg_write
+ call reg_write8
  pop bx
  pop eax
  ret
 init_gus:
  mov bx,4ch
  xor ax,ax
- call reg_write
- call gf_delay
- mov ax,100h
- call reg_write
- call gf_delay
+ call reg_write8
+ call gf_reset_delay
+ mov al,1
+ call reg_write8
+ call gf_reset_delay
  ; Detect writable RAM before enabling audio. Two locations cover the bank span.
  xor ebp,ebp
  call ram_probe
@@ -337,37 +368,43 @@ init_gus:
  call ram_probe
  jc .bad
  mov byte [gus_ready],1
+
+ ; Program the GF1 output clock before touching voice state. The original SDK
+ ; does this before initializing the active voices; 14 voices gives 44.1 kHz.
+ mov bl,0eh
+ mov al,0cdh
+ call reg_write8
+
  xor cx,cx
 .voices:
  mov al,cl
  call select_voice
- mov bx,0
- mov ax,300h
+ xor bx,bx
+ mov al,3
  call control_write
- mov bx,0dh
+ mov bl,0dh
+ mov al,3
  call control_write
- mov bx,9
+ mov bl,9
  xor ax,ax
  call reg_write
- mov bx,0ch
- mov ax,700h
- call reg_write
+ mov bl,0ch
+ mov al,7
+ call reg_write8
  inc cx
- cmp cx,32
+ cmp cx,14
  jb .voices
- mov bx,0eh
- mov ax,0cd00h ; 14 active voices -> 44.1kHz GF1 sample clock
- call reg_write
- mov bx,41h
+
+ mov bl,41h
  xor ax,ax
- call reg_write
- mov bx,45h
- call reg_write
- mov bx,49h
- call reg_write
- mov bx,4ch
- mov ax,300h ; run, DAC enabled, GF1 IRQs disabled
- call reg_write
+ call reg_write8
+ mov bl,45h
+ call reg_write8
+ mov bl,49h
+ call reg_write8
+ mov bl,4ch
+ mov al,3 ; run, DAC enabled, GF1 IRQs disabled
+ call reg_write8
  mov dx,[base]
  mov al,9 ; line out on, line in off, latches stay enabled
  out dx,al
@@ -548,7 +585,7 @@ stop_music:
  mov al,cl
  call select_voice
  mov bx,0
- mov ax,300h
+ mov al,3
  call control_write
  inc cx
  cmp cx,4
@@ -562,7 +599,7 @@ stop_all:
  mov al,cl
  call select_voice
  xor bx,bx
- mov ax,300h
+ mov al,3
  call control_write
  inc cx
  cmp cx,12
@@ -631,8 +668,8 @@ music_tick:
  je .pan
  cmp cl,3
  je .pan
- mov ax,0f00h
-.pan: call reg_write
+ mov al,0fh
+.pan: call reg_write8
 .params:
  mov bx,1
  mov ax,[di+2]
@@ -644,7 +681,7 @@ music_tick:
  jmp .advance
 .stop:
  xor bx,bx
- mov ax,300h
+ mov al,3
  call control_write
 .advance:
  add di,8
@@ -669,9 +706,10 @@ music_tick:
 ; SI=16-byte sample descriptor. Voice already selected.
 voice_sample:
  xor bx,bx
- mov ax,300h
+ mov al,3
  call control_write
  mov bx,0dh
+ mov al,3
  call control_write
  mov bx,2
  mov ax,[si]
@@ -731,9 +769,11 @@ effect_start:
  mov ax,[si+10]
  mov [fx_volumes+di],ax
  call voice_sample
- mov bx,0ch
- mov ax,700h
- call reg_write
+ ; Genuine GF1 hardware needs the effect volume re-latched after GO. Music
+ ; already gets a post-start 0x09 write from music_tick; one-shot effects did
+ ; not, which left them silent on a tested GUS MAX while PicoGUS played them.
+ mov byte [volume_dirty],1
+ call refresh_fx_volume
  inc byte [next_fx]
  cmp byte [next_fx],12
  jb .count
@@ -806,8 +846,8 @@ cleanup:
  je .timer
  call stop_all
  mov bx,4ch
- mov ax,100h
- call reg_write
+ mov al,1
+ call reg_write8
 .timer:
  popf
  cmp byte [timer_hooked],0
